@@ -179,10 +179,10 @@ $(document).ready(function() {
           <td class="p-2">${teamA}</td>
           <td class="p-2">${teamB}</td>
           <td class="p-2 text-center">
-            <input class="border p-1 w-20 text-center score-input" data-match="${i}" data-side="A" value="${m.scoreA || ''}" ${disableAttr}>
+            <input class="border p-1 w-20 text-center score-input" maxlength="2" pattern="[0-9]*" inputmode="numeric" data-match="${i}" data-side="A" value="${m.scoreA || ''}" ${disableAttr}>
           </td>
           <td class="p-2 text-center">
-            <input class="border p-1 w-20 text-center score-input" data-match="${i}" data-side="B" value="${m.scoreB || ''}" ${disableAttr}>
+            <input class="border p-1 w-20 text-center score-input" maxlength="2" pattern="[0-9]*" inputmode="numeric" data-match="${i}" data-side="B" value="${m.scoreB || ''}" ${disableAttr}>
           </td>
           <td class="p-2 text-center">
             <button class="lock-btn px-3 py-1 rounded">${lockText}</button>
@@ -221,11 +221,23 @@ $(document).ready(function() {
 
       // Update skor
       row.find(".score-input").on("input", function() {
+        let val = $(this).val();
+
+        // 🧱 Hanya angka
+        val = val.replace(/[^0-9]/g, "");
+
+        // ⛔ Maksimum 2 digit
+        if (val.length > 2) val = val.slice(0, 2);
+
+        // Update nilai input
+        $(this).val(val);
+
         const side = $(this).data("side");
         const midx = Number($(this).data("match"));
-        matches[midx][`score${side}`] = $(this).val();
+        matches[midx][`score${side}`] = val;
         saveAuto();
       });
+
 
       tbody.append(row);
     });
