@@ -1,0 +1,207 @@
+<script>
+$(document).ready(function() {
+  let players = [];
+  let matches = [];
+
+  function normalizeName(n) { return n.replace(/\s+/g,' ').trim(); }
+  function escapeHtml(text) {
+    return (text+"").replace(/[&<>"'`=\/]/g, s => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;",'/':'&#x2F;'
+    }[s]));
+  }
+
+  // === COUNT ALL PLAY (LOCKED + UNLOCKED) ===
+  function computeTotalPlayCount() {
+    const count = {};
+    players.forEach(p => count[p] = 0);
+    matches.forEach(m => {
+      m.teamA.concat(m.teamB).forEach(p => {
+        if (count[p] !== undefined) count[p]++;
+      });
+    });
+    return count;
+  }
+
+  // === COUNT LOCKED ONLY ===
+  function computeLockedPlayCount() {
+    const count = {};
+    players.forEach(p => count[p] = 0);
+    matches.forEach(m => {
+      if (m.locked) m.teamA.concat(m.teamB).forEach(p => {
+        if (count[p] !== undefined) count[p]++;
+      });
+    });
+    return count;
+  }
+
+  // === UPDATE PLAYER TABLE ===
+  function updatePlayerTable() {
+    const tbody = $("#playerTable");
+    const totalCount = computeTotalPlayCount();
+    const lockedCount = computeLockedPlayCount();
+    const maxGames = parseInt($("#maxGames").val()) || 1;
+
+    tbody.empty();
+    players.forEach((p, i) => {
+      const total = totalCount[p] || 0;
+      const locked = lockedCount[p] || 0;
+      const statusColor = total >= maxGames ? "text-red-600 font-semibold" : "text-slate-600";
+      tbody.append(`
+        <tr class="border-t">
+          <td class="p-2">
+            ${escapeHtml(p)}
+            <span class="${statusColor} text-xs ml-2">
+              [${locked}/${total}]
+            </span>
+          </td>
+          <td class="p-2 text-center">
+            <button class="text-red-500" onclick="removePlayer(${i})">Hapus</button>
+          </td>
+        </tr>
+      `);
+    });
+
+    // disable generate button kalau semua udah max
+    const allFull = players.every(p => (totalCount[p] || 0) >= maxGames);
+    $("#generateMatch").prop("disabled", allFull);
+    $("#generateMatch").toggleClass("opacity-40 cursor-not-allowed", allFull);
+  }
+
+  // === REMOVE PLAYER (if not locked) ===
+  window.removePlayer = function(i) {
+    const name = players[i];
+    const usedInLocked = matches.some(m => m.locked && m.teamA.concat(m.teamB).includes(name));
+    if (usedInLocked) return alert("Gak bisa hapus player yang udah ada di match locked.");
+    players.splice(i,1);
+    updatePlayerTable();
+    saveAuto();
+  };
+
+  // === RENDER MATCHES ===
+  function renderMatches() {
+    const tbody = $("#matchTable tbody");
+    tbody.empty();
+    matches.forEach((m, i) => {
+      const lockedClass = m.locked ? "bg-green-50" : "";
+      const disableAttr = m.locked ? "disabled" : "";
+      const lockText = m.locked ? "✔️ Locked" : "Save ✔️";
+      const row = $(`
+        <tr class="border-t ${lockedClass}" data-idx="${i}">
+          <td class="p-2 text-center">${i+1}</td>
+          <td class="p-2">${escapeHtml(m.teamA.join(" & "))}</td>
+          <td class="p-2">${escapeHtml(m.teamB.join(" & "))}</td>
+          <td class="p-2 text-center">
+            <input class="border p-1 w-20 text-center score-input" data-match="${i}" data-side="A" value="${m.scoreA||''}" ${disableAttr}>
+          </td>
+          <td class="p-2 text-center">
+            <input class="border p-1 w-20 text-center score-input" data-match="${i}" data-side="B" value="${m.scoreB||''}" ${disableAttr}>
+          </td>
+          <td class="p-2 text-center">
+            <button class="lock-btn px-3 py-1 rounded">${lockText}</button>
+            <button class="del-btn text-red-500 px-2">Del</button>
+          </td>
+        </tr>
+      `);
+
+      // Lock handler
+      row.find(".lock-btn").on("click", function() {
+        if (!m.locked) {
+          m.scoreA = row.find('input[data-side="A"]').val();
+          m.scoreB = row.find('input[data-side="B"]').val();
+          m.locked = true;
+        } else {
+          if (!confirm("Unlock match ini?")) return;
+          m.locked = false;
+        }
+        renderMatches();
+        updatePlayerTable();
+        saveAuto();
+      });
+
+      // Delete handler
+      row.find(".del-btn").on("click", function() {
+        if (m.locked) return alert("Gak bisa hapus match yang locked.");
+        matches.splice(i,1);
+        renderMatches();
+        updatePlayerTable();
+        saveAuto();
+      });
+
+      // Input handler
+      row.find(".score-input").on("input", function() {
+        const side = $(this).data("side");
+        const midx = $(this).data("match");
+        matches[midx][`score${side}`] = $(this).val();
+        saveAuto();
+      });
+
+      tbody.append(row);
+    });
+  }
+
+  // === ADD PLAYER ===
+  $("#addPlayer").on("click", () => addPlayer());
+  $("#playerName").on("keydown", e => { if (e.key === "Enter") addPlayer(); });
+
+  function addPlayer() {
+    const name = normalizeName($("#playerName").val());
+    if (!name) return alert("Isi nama dulu cuy!");
+    if (players.includes(name)) return alert("Nama udah ada!");
+    players.push(name);
+    $("#playerName").val("");
+    updatePlayerTable();
+    saveAuto();
+  }
+
+  // === GENERATE MATCH ===
+  $("#generateMatch").on("click", function() {
+    const maxGames = parseInt($("#maxGames").val()) || 1;
+    if (players.length < 4) return alert("Minimal 4 pemain cuy!");
+
+    const playCount = computeTotalPlayCount();
+    let available = players.filter(p => (playCount[p] || 0) < maxGames);
+    if (available.length < 4) return alert("Semua pemain udah penuh limit main-nya.");
+
+    function shuffle(a){ for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
+    available = shuffle(available);
+
+    const group = available.slice(0,4);
+    const teamA = [group[0], group[1]];
+    const teamB = [group[2], group[3]];
+
+    // add match
+    matches.push({ teamA, teamB, scoreA: "", scoreB: "", locked: false });
+    // update counter
+    group.forEach(p => playCount[p] = (playCount[p] || 0) + 1);
+
+    renderMatches();
+    updatePlayerTable();
+    saveAuto();
+  });
+
+  // === SAVE/LOAD LOCAL ===
+  function saveAuto() {
+    localStorage.setItem("badmatch_state_v3", JSON.stringify({
+      players, matches, maxGames: $("#maxGames").val()
+    }));
+  }
+  function loadAuto() {
+    const raw = localStorage.getItem("badmatch_state_v3");
+    if (!raw) return;
+    try {
+      const d = JSON.parse(raw);
+      players = d.players || [];
+      matches = d.matches || [];
+      $("#maxGames").val(d.maxGames || 2);
+    } catch {}
+  }
+
+  // === INIT ===
+  loadAuto();
+  renderMatches();
+  updatePlayerTable();
+
+  $("#saveLocal").on("click", () => { saveAuto(); alert("Data tersimpan!"); });
+  $("#loadLocal").on("click", () => { loadAuto(); renderMatches(); updatePlayerTable(); alert("Data loaded!"); });
+});
+</script>
