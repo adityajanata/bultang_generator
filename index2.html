@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>🏸 Bulutangkis — Accordion Best-of-3</title>
+
+  <!-- jQuery -->
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js"></script>
+
+  <!-- Tailwind (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- SheetJS for export -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <style>
+    .accordion-row { cursor: pointer; }
+    .accordion-header:hover { background: #f1f5f9; }
+    .accordion-body { display: none; }
+    .winner-badge { font-weight:600; padding:4px 8px; border-radius:9999px; }
+    #leaderboardTable { border-collapse: collapse; width: 100%; }
+    #leaderboardTable th { background: #f3f4f6; font-weight: 600; text-align: center; padding: 8px; }
+    #leaderboardTable tr:hover { background: #f9fafb; }
+  </style>
+</head>
+<body class="bg-slate-100 min-h-screen flex flex-col items-center p-6">
+
+  <h1 class="text-2xl font-bold mb-4">🏸 MRA Bulutangkis Matches — Best of 3</h1>
+
+  <div class="bg-white shadow p-4 rounded-xl w-full max-w-lg mb-6">
+    <div class="flex gap-2 mb-3">
+      <input id="playerName" placeholder="Nama Player" class="border p-2 rounded w-full" autocomplete="off" />
+      <button id="addPlayer" type="button" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded">+</button>
+    </div>
+
+    <table class="w-full text-sm border">
+      <thead class="bg-slate-200">
+        <tr><th class="p-2 text-left">Nama</th><th class="p-2">Action</th></tr>
+      </thead>
+      <tbody id="playerTable"></tbody>
+    </table>
+
+    <div class="mt-3 flex items-center gap-2">
+      <label class="font-semibold">Maksimal main per orang:</label>
+      <input id="maxGames" type="number" value="3" min="1" class="border p-1 rounded w-20 ml-2">
+      <button id="clearAll" type="button" class="ml-auto text-sm text-red-600">Clear All</button>
+    </div>
+
+    <div class="mt-4 flex gap-2">
+      <button id="generateMatch" type="button" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded">Generate Match (Add)</button>
+      <button id="saveLocal" type="button" class="bg-sky-500 hover:bg-sky-600 text-white px-4 py-2 rounded">Save (local)</button>
+      <button id="loadLocal" type="button" class="bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded">Load (local)</button>
+    </div>
+  </div>
+
+  <div class="bg-white shadow p-4 rounded-xl w-full max-w-5xl mb-6">
+    <h2 class="text-xl font-semibold mb-3">Daftar Match</h2>
+
+    <!-- Accordion container -->
+    <div class="bg-slate-50 rounded-lg overflow-hidden mb-4">
+      <!-- header row titles -->
+      <div class="grid grid-cols-12 gap-2 p-3 text-sm border-b bg-slate-100 font-semibold">
+        <div class="col-span-1 text-center">#</div>
+        <div class="col-span-5">Teams</div>
+        <div class="col-span-3 text-center">Winner</div>
+        <div class="col-span-3 text-center">Action</div>
+      </div>
+      <div id="matchContainer"></div>
+    </div>
+
+    <div class="mt-4 flex gap-2">
+      <button id="exportExcel" type="button" class="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded">Export ke Excel</button>
+      <button id="clearMatches" type="button" class="bg-gray-300 hover:bg-gray-400 px-4 py-2 rounded">Clear Matches</button>
+    </div>
+
+    <div class="mt-3 text-sm text-slate-600">
+      <p>Note: Klik <span class="font-semibold">Detail ▾</span> untuk buka skor Game 1–3. Tekan <span class="font-semibold">Save</span> untuk simpan skor sementara, lalu tekan <span class="font-semibold">Locked</span> untuk commit dan menghitung leaderboard.</p>
+    </div>    
+  </div>
+
+  <div class="bg-white shadow p-4 rounded-xl w-full max-w-5xl">
+    <h2 class="text-xl font-semibold mt-6 mb-2">🏆 Leaderboard</h2>
+      <table id="leaderboardTable" class="w-full border">
+        <thead class="bg-gray-200">
+          <tr>
+            <th class="p-2 text-center">#</th>
+            <th class="p-2 text-left">Pemain</th>
+            <th class="p-2 text-center">W</th>
+            <th class="p-2 text-center">D</th>
+            <th class="p-2 text-center">L</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+  </div>
+
+
+<script>
+$(document).ready(function() {
+  // GLOBAL state
+  let players = [];
+  let matches = [];
+
+  // helper escape
+  function escapeHtml(text) {
+    return String(text || "").replace(/[&<>"'`=\/]/g, function (s) {
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;",'/':'&#x2F;'})[s];
+    });
+  }
+
+  // Convert legacy single-score matches to games[] model (for backwards compatibility)
+  function normalizeLoadedMatches(arr) {
+    return arr.map(m => {
+      if (!m.games) {
+        const g1 = { scoreA: m.scoreA || "", scoreB: m.scoreB || "" };
+        return {
+          teamA: m.teamA || [],
+          teamB: m.teamB || [],
+          games: [g1, {scoreA:"",scoreB:""}, {scoreA:"",scoreB:""}],
+          winner: (m.scoreA !== undefined && m.scoreB !== undefined) ? (parseInt(m.scoreA) > parseInt(m.scoreB) ? (m.teamA||[]).join(" & ") : (parseInt(m.scoreB) > parseInt(m.scoreA) ? (m.teamB||[]).join(" & ") : "")) : (m.winner||""),
+          locked: !!m.locked
+        };
+      }
+      // ensure 3 games
+      const g = m.games.slice(0,3);
+      while (g.length < 3) g.push({scoreA:"",scoreB:""});
+      return { teamA: m.teamA || [], teamB: m.teamB || [], games: g, winner: m.winner || "", locked: !!m.locked };
+    });
+  }
+
+  // Play count (total matches present)
+  function computeTotalPlayCount() {
+    const count = {};
+    players.forEach(p => count[p] = 0);
+    matches.forEach(m => {
+      // count only participation (locked or not)
+      m.teamA.concat(m.teamB).forEach(p => {
+        if (count[p] !== undefined) count[p]++;
+      });
+    });
+    return count;
+  }
+
+  function computeLockedPlayCount() {
+    const count = {};
+    players.forEach(p => count[p] = 0);
+    matches.forEach(m => {
+      if (m.locked) m.teamA.concat(m.teamB).forEach(p => {
+        if (count[p] !== undefined) count[p]++;
+      });
+    });
+    return count;
+  }
+
+  // PLAYER UI
+  function updatePlayerTable() {
+    const tbody = $("#playerTable");
+    const totalCount = computeTotalPlayCount();
+    const lockedCount = computeLockedPlayCount();
+    const maxGames = parseInt($("#maxGames").val()) || 1;
+
+    tbody.empty();
+    players.forEach((p, i) => {
+      const total = totalCount[p] || 0;
+      const locked = lockedCount[p] || 0;
+      const statusColor = total >= maxGames ? "text-red-600 font-semibold" : "text-slate-600";
+      tbody.append(`
+        <tr class="border-t">
+          <td class="p-2">
+            ${escapeHtml(p)}
+            <span class="${statusColor} text-xs ml-2">[${locked}/${total}]</span>
+          </td>
+          <td class="p-2 text-center">
+            <button class="text-red-500" onclick="removePlayer(${i})">Delete</button>
+          </td>
+        </tr>
+      `);
+    });
+
+    const allFull = players.every(p => (totalCount[p] || 0) >= maxGames);
+    $("#generateMatch").prop("disabled", allFull);
+    $("#generateMatch").toggleClass("opacity-40 cursor-not-allowed", allFull);
+  }
+
+  window.removePlayer = function(i) {
+    const name = players[i];
+    const usedInLocked = matches.some(m => m.locked && m.teamA.concat(m.teamB).includes(name));
+    if (usedInLocked) return alert("Gak bisa hapus player yang udah ada di match locked.");
+    players.splice(i,1);
+    updatePlayerTable();
+    saveAuto();
+  };
+
+  // RENDER MATCHES — accordion best-of-3
+  function renderMatches() {
+    const container = $("#matchContainer");
+    container.empty();
+
+    matches.forEach((m, i) => {
+      const idx = i + 1;
+      const winnerText = m.winner ? `<span class="winner-badge bg-amber-100 text-amber-800">${escapeHtml(m.winner)}</span>` : `<span class="text-slate-400">—</span>`;
+      const lockedIcon = m.locked ? `<span class="text-green-600">✔</span>` : `<span class="text-slate-400">●</span>`;
+
+      const header = $(`
+        <div class="accordion-row border-b" data-idx="${i}">
+          <div class="grid grid-cols-12 gap-2 p-3 accordion-header items-center">
+            <div class="col-span-1 text-center text-sm">${idx}</div>
+            <div class="col-span-5 text-sm">${escapeHtml(m.teamA.join(" & "))} <span class="text-slate-400">vs</span> ${escapeHtml(m.teamB.join(" & "))}</div>
+            <div class="col-span-3 text-center">${winnerText}</div>
+            <div class="col-span-3 text-center">
+              
+              <button class="px-2 py-1 rounded ${m.locked ? 'bg-gray-200 text-slate-500' : 'bg-green-500 text-white'} lock-btn mr-2">${m.locked ? 'Locked' : 'Save'}</button>
+              <button class="btn-delete bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded mr-2">Delete</button>
+              <span class="ml-2">${lockedIcon}</span>
+            </div>
+          </div>
+        </div>
+      `);
+
+      const g = m.games || [{},{},{}];
+
+      const body = $(`
+        <div class="accordion-body border-b bg-white" data-idx="${i}">
+          <div class="p-4 grid grid-cols-12 gap-2 items-center text-sm">
+            <div class="col-span-7">
+              <div class="mb-2 font-semibold">Detail Match ${idx}</div>
+              ${[0,1,2].map(j => `
+                <div class="grid grid-cols-12 gap-2 items-center mb-2">
+                  <div class="col-span-3 text-sm">Game ${j+1}</div>
+                  <div class="col-span-3">
+                    <input data-game="${j}" data-side="A" data-match="${i}" class="game-input border p-1 w-full text-center" value="${escapeHtml(g[j].scoreA||'')}" ${m.locked?'disabled':''}>
+                  </div>
+                  <div class="col-span-1 text-center">-</div>
+                  <div class="col-span-3">
+                    <input data-game="${j}" data-side="B" data-match="${i}" class="game-input border p-1 w-full text-center" value="${escapeHtml(g[j].scoreB||'')}" ${m.locked?'disabled':''}>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+
+            <div class="col-span-5">
+              <div class="mb-2"><strong>Info</strong></div>
+              <div class="mb-1">Status: <span>${m.locked ? '🔒 Locked' : '🟢 Open'}</span></div>
+              <div class="mb-1">Winner: <span class="match-winner">${m.winner || '-'}</span></div>
+              <div class="mt-3">
+                <button class="btn-save bg-emerald-500 text-white px-3 py-1 rounded mr-2" ${m.locked?'disabled':''}>Save Score</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `);
+
+      container.append(header);
+      container.append(body);
+
+      // accordion toggle
+      header.find(".open-btn, .accordion-header").on("click", function(e) {
+        if ($(e.target).hasClass("lock-btn") || $(e.target).hasClass("btn-save")) return;
+        const b = $(this).closest(".accordion-row").next(".accordion-body");
+        $(".accordion-body").not(b).slideUp(150);
+        b.slideToggle(180);
+      });
+
+      // input validation (digits only, max 2)
+      body.find(".game-input").on("input", function() {
+        let v = $(this).val();
+        v = v.replace(/[^0-9]/g, "");
+        if (v.length > 2) v = v.slice(0, 2);
+        $(this).val(v);
+      });
+
+      // save (store games[] and compute winner)
+      body.find(".btn-save").on("click", function() {
+        const inputs = body.find(".game-input");
+        const newGames = [{scoreA:"",scoreB:""},{scoreA:"",scoreB:""},{scoreA:"",scoreB:""}];
+        inputs.each(function() {
+          const game = Number($(this).data("game"));
+          const side = $(this).data("side");
+          newGames[game][`score${side}`] = $(this).val();
+        });
+
+        // require at least Game 1 filled (and preferably Game 2)
+        if ((newGames[0].scoreA === "" && newGames[0].scoreB === "")) {
+          return alert("Isi minimal Game 1 dulu cuy!");
+        }
+
+        // assign
+        m.games = newGames;
+
+        // count wins per team
+        let winA = 0, winB = 0;
+        newGames.forEach(gm => {
+          const a = parseInt(gm.scoreA || 0);
+          const b = parseInt(gm.scoreB || 0);
+          if (!a && !b) return;
+          if (a > b) winA++;
+          else if (b > a) winB++;
+        });
+
+        if (winA >= 2) m.winner = m.teamA.join(" & ");
+        else if (winB >= 2) m.winner = m.teamB.join(" & ");
+        else m.winner = ""; // undecided yet
+
+        renderMatches();
+        updatePlayerTable();
+        updateLeaderboard();
+        saveAuto();
+      });
+
+      // lock button (in header)
+      header.find(".lock-btn").on("click", function(e) {
+        if (!m.locked) {
+          if (!m.winner) return alert("Isi dan simpan skor dulu (kalo perlu 2 game)!");
+          m.locked = true;
+        } else {
+          if (!confirm("Unlock match ini?")) return;
+          m.locked = false;
+        }
+        renderMatches();
+        updatePlayerTable();
+        updateLeaderboard();
+        saveAuto();
+      });
+
+      // delete
+      header.find(".btn-delete").on("click", function() {
+        if (m.locked) return alert("Match sudah dikunci!");
+        if (!confirm("Hapus match ini?")) return;
+        matches.splice(i, 1);
+        renderMatches();
+        updatePlayerTable();
+        updateLeaderboard();
+        saveAuto();
+      });
+    });
+
+    // swap dropdown for replacing players (still available)
+    $(".swap-btn").off("click").on("click", function(e) {
+      e.stopPropagation();
+      const matchIndex = $(this).data("match");
+      const team = $(this).data("team");
+      const playerOut = $(this).data("player");
+
+      const maxGames = parseInt($("#maxGames").val()) || 1;
+      const playCount = computeTotalPlayCount();
+
+      const eligible = players.filter(p => (playCount[p] || 0) < maxGames && p !== playerOut);
+      if (eligible.length === 0) {
+        alert("Gak ada pemain yang bisa menggantikan, cuy!");
+        return;
+      }
+
+      $(".swap-select").remove();
+
+      const select = $(`
+        <select class="swap-select border p-1 text-sm bg-white absolute z-50">
+          <option value="">-- Pilih pengganti --</option>
+          ${eligible.map(p => `<option value="${p}">${escapeHtml(p)}</option>`).join("")}
+        </select>
+      `);
+
+      const offset = $(this).offset();
+      select.css({ top: offset.top + 20, left: offset.left, position: "absolute" });
+      $("body").append(select);
+      select.focus();
+
+      select.on("change", function() {
+        const newPlayer = $(this).val();
+        if (!newPlayer) return $(this).remove();
+        const match = matches[matchIndex];
+        if (team === "A") match.teamA = match.teamA.map(p => (p === playerOut ? newPlayer : p));
+        else match.teamB = match.teamB.map(p => (p === playerOut ? newPlayer : p));
+        $(this).remove();
+        saveAuto();
+        renderMatches();
+        updatePlayerTable();
+      });
+
+      $(document).on("click.swapDismiss", function(ev) {
+        if (!$(ev.target).closest(".swap-select, .swap-btn").length) {
+          $(".swap-select").remove();
+          $(document).off("click.swapDismiss");
+        }
+      });
+    });
+
+    $(".accordion-body").hide();
+  }
+
+  // LEADERBOARD
+  function updateLeaderboard() {
+    const stats = {};
+    players.forEach(p => stats[p] = { W:0, D:0, L:0 });
+
+    matches.forEach(m => {
+      if (!m.locked) return;
+      // determine winner by m.winner (team string) or games
+      if (m.winner) {
+        const aName = m.teamA.join(" & ");
+        const bName = m.teamB.join(" & ");
+        if (m.winner === aName) {
+          m.teamA.forEach(p => stats[p].W++);
+          m.teamB.forEach(p => stats[p].L++);
+        } else if (m.winner === bName) {
+          m.teamB.forEach(p => stats[p].W++);
+          m.teamA.forEach(p => stats[p].L++);
+        } else {
+          m.teamA.concat(m.teamB).forEach(p => stats[p].D++);
+        }
+      } else {
+        // fallback: check games sum
+        const g = m.games || [];
+        let winA = 0, winB = 0;
+        g.forEach(gm => {
+          const a = parseInt(gm.scoreA||0), b = parseInt(gm.scoreB||0);
+          if (a > b) winA++; else if (b > a) winB++;
+        });
+        if (winA > winB) { m.teamA.forEach(p => stats[p].W++); m.teamB.forEach(p => stats[p].L++); }
+        else if (winB > winA) { m.teamB.forEach(p => stats[p].W++); m.teamA.forEach(p => stats[p].L++); }
+      }
+    });
+
+    const leaderboard = Object.entries(stats)
+      .map(([name, s]) => ({ name, ...s, total: s.W + s.D + s.L }))
+      .sort((a, b) => b.W - a.W || b.D - a.D || a.L - b.L || a.name.localeCompare(b.name));
+
+    const tbody = $("#leaderboardTable tbody");
+    tbody.empty();
+    const medals = ["🥇", "🥈", "🥉"];
+
+    leaderboard.forEach((p, i) => {
+      const medal = medals[i] || i + 1;
+      const highlight = i === 0 ? "bg-yellow-100 font-bold" : i === 1 ? "bg-gray-100 font-semibold" : i === 2 ? "bg-orange-100 font-semibold" : "";
+      tbody.append(`
+        <tr class="border-t ${highlight}">
+          <td class="p-2 text-center">${medal}</td>
+          <td class="p-2">${escapeHtml(p.name)}</td>
+          <td class="p-2 text-center">${p.W}</td>
+          <td class="p-2 text-center">${p.D}</td>
+          <td class="p-2 text-center">${p.L}</td>
+        </tr>
+      `);
+    });
+  }
+
+  // ADD player
+  $("#addPlayer").on("click", () => addPlayer());
+  $("#playerName").on("keydown", e => { if (e.key === "Enter") addPlayer(); });
+  function addPlayer() {
+    const name = (String($("#playerName").val() || "")).replace(/\s+/g,' ').trim();
+    if (!name) return alert("Isi nama dulu cuy!");
+    if (players.some(p => p.toLowerCase() === name.toLowerCase())) return alert("Nama udah ada!");
+    players.push(name);
+    $("#playerName").val("");
+    updatePlayerTable();
+    updateLeaderboard();
+    saveAuto();
+  }
+
+  // GENERATE MATCH (fair)
+  $("#generateMatch").on("click", function () {
+    const maxGames = parseInt($("#maxGames").val()) || 1;
+    if (players.length < 4) return alert("Minimal 4 pemain cuy!");
+
+    const playCount = computeTotalPlayCount();
+    const available = players.filter(p => (playCount[p] || 0) < maxGames);
+    if (available.length < 4) {
+      return alert("❗ Semua pemain sudah mencapai limit atau kurang pemain yang bisa main.");
+    }
+
+    const minPlay = Math.min(...available.map(p => playCount[p] || 0));
+    let fairGroup = available.filter(p => (playCount[p] || 0) <= minPlay + 1);
+    if (fairGroup.length < 4) fairGroup = available;
+
+    function shuffle(a) { for (let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
+    fairGroup = shuffle(fairGroup);
+    const group = fairGroup.slice(0, 4);
+    const teamA = [group[0], group[1]];
+    const teamB = [group[2], group[3]];
+
+    matches.push({ teamA, teamB, games: [{scoreA:"",scoreB:""},{scoreA:"",scoreB:""},{scoreA:"",scoreB:""}], winner: "", locked: false });
+
+    renderMatches();
+    updatePlayerTable();
+    saveAuto();
+  });
+
+  // CLEAR matches
+  $("#clearMatches").on("click", function() {
+    if (matches.length === 0) return alert("Belum ada match untuk di-clear.");
+    const lockedCount = matches.filter(m => m.locked).length;
+    if (lockedCount === 0) {
+      if (!confirm("Hapus semua match yang belum terkunci?")) return;
+      matches = [];
+    } else {
+      if (confirm(`Ada ${lockedCount} match terkunci. Hapus semua match (termasuk locked)?`)) {
+        matches = [];
+      } else {
+        matches = matches.filter(m => m.locked);
+      }
+    }
+    renderMatches();
+    updatePlayerTable();
+    saveAuto();
+  });
+
+  // CLEAR all
+  $("#clearAll").on("click", function() {
+    if (!players.length) return alert("Gak ada player untuk di-clear.");
+    if (!confirm("Yakin hapus semua player dan match?")) return;
+    players = [];
+    matches = [];
+
+    renderMatches();
+    updatePlayerTable();
+    updateLeaderboard();
+    saveAuto();
+  });
+
+  // SAVE / LOAD local
+  function saveAuto() {
+    localStorage.setItem("badmatch_state_v4", JSON.stringify({ players, matches, maxGames: $("#maxGames").val() }));
+  }
+  function loadAuto() {
+    const raw = localStorage.getItem("badmatch_state_v4");
+    if (!raw) return;
+    try {
+      const d = JSON.parse(raw);
+      players = d.players || [];
+      matches = d.matches ? normalizeLoadedMatches(d.matches) : [];
+      if (d.maxGames) $("#maxGames").val(d.maxGames);
+    } catch (e) { console.error(e); }
+  }
+
+  // EXPORT Excel (Matches + Leaderboard sheet)
+  $("#exportExcel").on("click", function () {
+    if (!matches.length) return alert("Belum ada match cuy!");
+
+    // Matches sheet
+    const dataMatches = [["No","Team A","Team B","Game1 A","Game1 B","Game2 A","Game2 B","Game3 A","Game3 B","Winner","Status"]];
+    matches.forEach((m, i) => {
+      const g = m.games || [{},{},{}];
+      dataMatches.push([
+        i+1,
+        m.teamA.join(" & "),
+        m.teamB.join(" & "),
+        g[0].scoreA || "",
+        g[0].scoreB || "",
+        g[1].scoreA || "",
+        g[1].scoreB || "",
+        g[2].scoreA || "",
+        g[2].scoreB || "",
+        m.winner || "",
+        m.locked ? "Locked" : "Open"
+      ]);
+    });
+    const ws1 = XLSX.utils.aoa_to_sheet(dataMatches);
+
+    // Leaderboard sheet
+    // compute same stats as updateLeaderboard()
+    const stats = {};
+    players.forEach(p => stats[p] = { W:0, D:0, L:0 });
+    matches.forEach(m => {
+      if (!m.locked) return;
+      if (m.winner) {
+        const aName = m.teamA.join(" & "), bName = m.teamB.join(" & ");
+        if (m.winner === aName) { m.teamA.forEach(p => stats[p].W++); m.teamB.forEach(p => stats[p].L++); }
+        else if (m.winner === bName) { m.teamB.forEach(p => stats[p].W++); m.teamA.forEach(p => stats[p].L++); }
+      }
+    });
+    const lb = [["Rank","Player","W","D","L"]];
+    const sorted = Object.entries(stats).map(([name,s])=>({name,...s})).sort((a,b)=>b.W - a.W || b.D - a.D || a.L - b.L);
+    sorted.forEach((r,i)=> lb.push([i+1, r.name, r.W, r.D, r.L]));
+    const ws2 = XLSX.utils.aoa_to_sheet(lb);
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws1, "Matches");
+    XLSX.utils.book_append_sheet(wb, ws2, "Leaderboard");
+    XLSX.writeFile(wb, "Bulutangkis_Matches.xlsx");
+  });
+
+  // Save/Load buttons
+  $("#saveLocal").on("click", function(){ saveAuto(); alert("Disimpan ke localStorage!"); });
+  $("#loadLocal").on("click", function(){ loadAuto(); renderMatches(); updatePlayerTable(); updateLeaderboard(); alert("Data loaded!"); });
+
+  // INIT
+  loadAuto();
+  renderMatches();
+  updatePlayerTable();
+  updateLeaderboard();
+
+  // expose for debug
+  window._mm_state = () => ({ players, matches });
+});
+</script>
+</body>
+</html>
